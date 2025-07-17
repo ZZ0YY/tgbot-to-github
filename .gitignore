@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-selfcheck.json
+.env
+
+# Vercel
+.vercel/
+
+# IDE files
+.idea/
+.vscode/
