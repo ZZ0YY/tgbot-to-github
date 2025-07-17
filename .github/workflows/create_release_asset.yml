@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 'Debug: Print client payload'
-        run: echo '${{ toJSON(github.event.client_payload) }}' # 已修复
+        run: echo '${{ toJSON(github.event.client_payload) }}'
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -29,12 +29,13 @@ jobs:
 
       - name: Download file from Telegram
         id: download
-        # 增加下载步骤的超时时间
-        timeout-minutes: 20 # 给予 20 分钟下载
+        timeout-minutes: 20 # 为下载大文件设置超时
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           FILE_ID: ${{ github.event.client_payload.file_id }}
-          FILE_NAME: ${{ github.event.client_payload.file_name }}
+          # --- 核心修改：传递 Base64 编码的文件名 ---
+          FILE_NAME_B64: ${{ github.event.client_payload.file_name_b64 }}
+          # ----------------------------------------
         run: python download_script.py
 
       - name: Get current date
@@ -42,7 +43,7 @@ jobs:
         run: echo "today=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Create or Update Release and Upload Asset
-        timeout-minutes: 30 # 已增加超时时间
+        timeout-minutes: 30 # 为上传大文件设置超时
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.download.outputs.downloaded_file_name }}
