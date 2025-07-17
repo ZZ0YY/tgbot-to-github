@@ -15,3 +15,4 @@ pip-selfcheck.json
 # IDE files
 .idea/
 .vscode/
+.vercel
