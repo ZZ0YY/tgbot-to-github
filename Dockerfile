@@ -17,6 +17,10 @@ COPY . .
 # 暴露 Flask 默认的 5000 端口
 EXPOSE 5000
 
+# 暴露一个端口（这一步更多是文档性质，Zeabur 不强制要求）
+EXPOSE 8080
+
 # 启动应用的命令
-# 使用 gunicorn 运行，并监听所有网络接口的 5000 端口
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "api.index:app"]
+# 让 gunicorn 绑定到 Zeabur 提供的 $PORT 环境变量上
+# 如果 $PORT 不存在，则默认使用 8080
+CMD ["gunicorn", "--bind", "0.0.0.0:${PORT:-8080}", "api.index:app"]
