@@ -1,0 +1,19 @@
+# docker-compose.yml
+
+version: '3.8'
+
+services:
+  telegram-bot-backend:
+    # 使用我们项目中的 Dockerfile 来构建镜像
+    build: .
+    # 如果服务崩溃，自动重启
+    restart: always
+    # 将容器的 8080 端口映射到服务器的 5000 端口
+    # 你可以把 5000 改成你服务器上任何未被占用的端口
+    ports:
+      - "5000:8080"
+    # 通过 .env 文件来管理敏感信息
+    env_file:
+      - .env
+    # 给容器取一个好记的名字
+    container_name: my_telegram_uploader_bot

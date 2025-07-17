@@ -16,3 +16,4 @@ pip-selfcheck.json
 .idea/
 .vscode/
 .vercel
+.env
