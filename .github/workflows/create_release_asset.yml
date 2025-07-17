@@ -5,6 +5,7 @@ name: Create Release Asset from Telegram File
 on:
   repository_dispatch:
     types: [upload_file_to_release]
+  workflow_dispatch:
 
 jobs:
   build-and-upload:
@@ -29,21 +30,21 @@ jobs:
 
       - name: Download file from Telegram
         id: download
-        timeout-minutes: 20 # 为下载大文件设置超时
+        timeout-minutes: 20
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           FILE_ID: ${{ github.event.client_payload.file_id }}
-          # --- 核心修改：传递 Base64 编码的文件名 ---
           FILE_NAME_B64: ${{ github.event.client_payload.file_name_b64 }}
-          # ----------------------------------------
         run: python download_script.py
 
-      - name: Get current date
+      - name: Get current date in Asia/Shanghai
         id: date
-        run: echo "today=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        # --- 核心修改：设置 TZ 环境变量来指定时区 ---
+        run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        # ---------------------------------------------
 
       - name: Create or Update Release and Upload Asset
-        timeout-minutes: 30 # 为上传大文件设置超时
+        timeout-minutes: 30
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.download.outputs.downloaded_file_name }}
