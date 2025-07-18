@@ -53,4 +53,4 @@ jobs:
           
           echo "准备将 './downloads' 目录同步到远程 '$REMOTE_PATH'"
           
-          rclone copy ./downloads "$REMOTE_PATH" --progress --no-traverse --git-ask-password=false
+          rclone copy ./downloads "$REMOTE_PATH" --progress --no-traverse
