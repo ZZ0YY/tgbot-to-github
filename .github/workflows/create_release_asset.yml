@@ -11,7 +11,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Rclone 创建 Release 所必需的权限
+      contents: write
 
     steps:
       - name: 检出代码
@@ -33,13 +33,28 @@ jobs:
           ORIGINAL_FILE_NAME_B64: ${{ github.event.client_payload.original_file_name_b64 }}
         run: python download_script.py
 
-      - name: 安装并配置 Rclone
+      - name: 安装 Rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+
+      # --- 核心修改：手动创建 Rclone 配置文件 ---
+      - name: 配置 Rclone
         env:
-          RCLONE_CONFIG_GITHUB_TYPE: github
-          RCLONE_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 PAT 进行授权
+          # 将 Token 作为环境变量传入，以避免在脚本中暴露
+          RCLONE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl https://rclone.org/install.sh | sudo bash
-          rclone version
+          # 创建 Rclone 的配置目录
+          mkdir -p ~/.config/rclone
+          
+          # 使用 echo 和重定向操作，将配置内容写入 rclone.conf 文件
+          # [github] 是远程盘的名称，必须与 rclone copy 命令中的一致
+          echo "[github]
+          type = github
+          token = ${RCLONE_GITHUB_TOKEN}" > ~/.config/rclone/rclone.conf
+          
+          echo "Rclone configuration generated successfully."
+          # 验证配置是否成功
+          rclone config list
+      # -------------------------------------------
 
       - name: 获取当前日期 (上海时区)
         id: date
@@ -49,6 +64,7 @@ jobs:
         timeout-minutes: 60
         run: |
           RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
+          # 这里我们使用之前在配置文件中定义的远程盘名称 "github"
           REMOTE_PATH="github:${{ github.repository }}@$RELEASE_TAG"
           
           echo "准备将 './downloads' 目录同步到远程 '$REMOTE_PATH'"
