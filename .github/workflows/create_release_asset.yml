@@ -1,6 +1,6 @@
-# .github/workflows/create_release_asset.yml
+# /.github/workflows/create_release_asset.yml
 
-name: Create Release Asset from Telegram File
+name: 通过 Rclone 创建 Release Asset
 
 on:
   repository_dispatch:
@@ -8,48 +8,49 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-upload:
+  build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Rclone 创建 Release 所必需的权限
 
     steps:
-      - name: Checkout code
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 'Debug: Print client payload'
-        run: echo '${{ toJSON(github.event.client_payload) }}'
-
-      - name: Set up Python
+      - name: 设置 Python 环境
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: Install dependencies
+      - name: 安装 Python 依赖
         run: python -m pip install requests
 
-      - name: Download file from Telegram
-        id: download
-        timeout-minutes: 20
+      - name: 从 Telegram 下载文件
+        timeout-minutes: 60
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           FILE_ID: ${{ github.event.client_payload.file_id }}
-          FILE_NAME_B64: ${{ github.event.client_payload.file_name_b64 }}
+          ORIGINAL_FILE_NAME_B64: ${{ github.event.client_payload.original_file_name_b64 }}
         run: python download_script.py
 
-      - name: Get current date in Asia/Shanghai
-        id: date
-        # --- 核心修改：设置 TZ 环境变量来指定时区 ---
-        run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-        # ---------------------------------------------
+      - name: 安装并配置 Rclone
+        env:
+          RCLONE_CONFIG_GITHUB_TYPE: github
+          RCLONE_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 PAT 进行授权
+        run: |
+          curl https://rclone.org/install.sh | sudo bash
+          rclone version
 
-      - name: Create or Update Release and Upload Asset
-        timeout-minutes: 30
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ steps.download.outputs.downloaded_file_name }}
-          tag_name: "daily-backup-${{ steps.date.outputs.today }}"
-          name: "Daily Backup - ${{ steps.date.outputs.today }}"
-          body: |
-            Files automatically uploaded from Telegram on ${{ steps.date.outputs.today }}.
-            This release is automatically managed.
+      - name: 获取当前日期 (上海时区)
+        id: date
+        run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: 同步文件到 GitHub Releases
+        timeout-minutes: 60
+        run: |
+          RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
+          REMOTE_PATH="github:${{ github.repository }}@$RELEASE_TAG"
+          
+          echo "准备将 './downloads' 目录同步到远程 '$REMOTE_PATH'"
+          
+          rclone copy ./downloads "$REMOTE_PATH" --progress --no-traverse --git-ask-password=false
