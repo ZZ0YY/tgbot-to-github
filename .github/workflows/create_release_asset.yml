@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过 cURL 和 GitHub API 直接上传 Release Asset
+name: 通过官方 Action 上传 Release Asset
 
 on:
   repository_dispatch:
@@ -11,7 +11,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # 必须，用于创建/获取 Release
 
     steps:
       - name: 1. 检出代码
@@ -38,8 +38,7 @@ jobs:
           RELEASE_TAG="daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-      # --- 核心修改：分离“创建/获取”和“上传”步骤 ---
-      - name: 5. 确保 Release 存在并获取上传 URL
+      - name: 5. 创建或找到 Release 并获取上传 URL
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -50,41 +49,37 @@ jobs:
           body: "通过机器人自动备份的文件。"
           draft: false
           prerelease: false
-        # --- 关键！让这一步在“已存在”错误时不要失败 ---
-        continue-on-error: true
+        continue-on-error: true # 关键！如果已存在，则继续
 
-      - name: 6. 获取已存在的 Release 的上传 URL (如果上一步是跳过的)
-        # 只有当上一步因为 'already_exists' 而被跳过时，这一步才会运行
+      - name: 6. 获取已存在的 Release 的上传 URL
         if: steps.create_release.outcome == 'failure'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 使用 gh cli 获取已存在的 release 的 upload_url
-          UPLOAD_URL=$(gh release view "${{ steps.release_info.outputs.release_tag }}" --json uploadUrl -q .uploadUrl)
-          echo "UPLOAD_URL=$UPLOAD_URL" >> $GITHUB_OUTPUT
         id: get_existing_release
-
-      - name: 7. 使用 cURL 上传文件
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            const release = releases.data.find(r => r.tag_name === '${{ steps.release_info.outputs.release_tag }}');
+            if (release) {
+              core.setOutput('upload_url', release.upload_url);
+            }
+        
+      # --- 核心修改：使用 GitHub 官方的上传 Action ---
+      - name: 7. 上传文件到 Release
+        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # --- 关键！根据上一步的结果，决定使用哪个 upload_url ---
-          # 如果第 5 步成功了，就用它的输出
-          # 如果第 5 步失败了（因为已存在），就用第 6 步的输出
-          UPLOAD_URL="${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.UPLOAD_URL }}"
-          FILE_PATH="${{ steps.download.outputs.file_path }}"
-          ORIGINAL_NAME="${{ steps.download.outputs.original_name }}"
+        with:
+          # 根据之前步骤的结果，决定使用哪个 upload_url
+          upload_url: ${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}
           
-          # 使用 jq 进行 URL 编码，这是最可靠的方式
-          # 如果 runner 上没有 jq, 我们需要先安装
-          sudo apt-get update && sudo apt-get install -y jq
-          URL_ENCODED_NAME=$(jq -sRr @uri <<< "$ORIGINAL_NAME")
+          # 要上传的文件的本地路径
+          asset_path: ${{ steps.download.outputs.file_path }}
           
-          echo "Uploading file '$FILE_PATH' to Release '${{ steps.release_info.outputs.release_tag }}'..."
+          # 在 Release 中显示的文件名
+          asset_name: ${{ steps.download.outputs.original_name }}
           
-          curl -sS \
-            --request POST \
-            --url "$UPLOAD_URL?name=$URL_ENCODED_NAME" \
-            --header "Authorization: token $GITHUB_TOKEN" \
-            --header "Content-Type: application/octet-stream" \
-            --data-binary "@$FILE_PATH"
+          # 内容类型，通常可以自动检测
+          asset_content_type: application/octet-stream
