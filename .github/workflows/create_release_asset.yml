@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过 Rclone 创建 Release Asset (带验证)
+name: 通过 Rclone 创建 Release Asset (Bash printf 版)
 
 on:
   repository_dispatch:
@@ -36,32 +36,31 @@ jobs:
       - name: 5. 安装 Rclone
         run: curl https://rclone.org/install.sh | sudo bash
 
-      - name: 6. 使用 Python 脚本生成 Rclone 配置文件
+      # --- 核心修改：使用 printf 保证配置文件内容的纯净性 ---
+      - name: 6. 动态配置 Rclone (使用 printf)
         env:
           RCLONE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python create_rclone_config.py
-      
-      # --- 全新的、至关重要的验证步骤 ---
-      - name: 7. 验证 Rclone 配置文件内容
         run: |
-          echo "--- 开始验证配置文件 ---"
-          CONFIG_FILE_PATH=~/.config/rclone/rclone.conf
-          if [ -f "$CONFIG_FILE_PATH" ]; then
-            echo "文件存在于: $CONFIG_FILE_PATH"
-            echo "文件的确切内容是:"
-            cat "$CONFIG_FILE_PATH"
-          else
-            echo "::error::错误：配置文件不存在于预期路径！"
-            exit 1
-          fi
-          echo "--- 验证结束 ---"
-      # ---------------------------------
+          CONFIG_DIR=~/.config/rclone
+          CONFIG_FILE_PATH="$CONFIG_DIR/rclone.conf"
+          mkdir -p "$CONFIG_DIR"
+          
+          # 使用 printf 来创建配置文件，这是最可靠的方式
+          # %s 会被后面的参数替换，\n 是换行符
+          printf "[github]\ntype = github\ntoken = %s\n" "$RCLONE_GITHUB_TOKEN" > "$CONFIG_FILE_PATH"
 
-      - name: 8. 获取用于 Release 的日期标签
+          echo "--- Rclone 配置验证 ---"
+          echo "配置文件的内容是:"
+          cat "$CONFIG_FILE_PATH"
+          echo "Rclone 识别到的远程盘是:"
+          rclone listremotes
+          echo "-----------------------"
+
+      - name: 7. 获取用于 Release 的日期标签
         id: date
         run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
         
-      - name: 9. 同步文件到 GitHub Releases
+      - name: 8. 同步文件到 GitHub Releases
         timeout-minutes: 60
         run: |
           RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
@@ -69,5 +68,5 @@ jobs:
           
           echo "准备将 './downloads' 目录同步到远程: ${REMOTE_PATH}"
           
-          # 增加 -vv 参数打印最详细的调试日志，并强制指定配置文件路径
-          rclone copy ./downloads "${REMOTE_PATH}" --config ~/.config/rclone/rclone.conf --progress --no-traverse -vv
+          # 不再需要 --config 参数，因为我们已经确认了默认路径
+          rclone copy ./downloads "${REMOTE_PATH}" --progress --no-traverse -vv
