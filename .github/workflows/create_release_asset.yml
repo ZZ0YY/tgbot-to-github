@@ -1,20 +1,36 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过用户 API 下载并上传大文件
+name: 通过用户 API 下载并上传大文件 (顺序执行版)
+
 on:
-  repository_dispatch: { types: [upload_file_from_user_api] }
+  repository_dispatch:
+    types: [upload_file_from_user_api]
   workflow_dispatch:
+
+# --- 并发控制：确保任务按顺序排队，不互相取消 ---
+concurrency:
+  group: telegram-download
+  cancel-in-progress: false
+# ------------------------------------------------
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    permissions: { contents: write }
+    permissions:
+      contents: write
+
+    # Job 级别的总超时，设置为 6 小时 (GitHub Free Plan in Public Repo)
+    timeout-minutes: 350
+
     steps:
       - { name: 1. 检出代码, uses: actions/checkout@v4 }
       - { name: 2. 设置 Python 环境, uses: actions/setup-python@v4, with: { python-version: '3.11' } }
       - { name: 3. 安装 Telethon 依赖, run: python -m pip install telethon }
+
       - name: 4. 通过用户 API 下载文件
         id: download
-        timeout-minutes: 120
+        # Step 级别的超时
+        timeout-minutes: 300 # 5 小时
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
@@ -22,9 +38,11 @@ jobs:
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
           MESSAGE_ID: ${{ github.event.client_payload.message_id }}
         run: python -u download_script.py
+
       - name: 5. 准备 Release 信息
         id: release_info
         run: echo "release_tag=daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
       - name: 6. 确保 Release 存在并获取上传 URL
         id: create_release
         uses: actions/create-release@v1
@@ -34,6 +52,7 @@ jobs:
           release_name: "每日备份 - ${{ steps.release_info.outputs.release_tag }}"
           body: "通过机器人自动备份的大文件。"
         continue-on-error: true
+
       - name: 7. 获取已存在的 Release 的上传 URL
         if: steps.create_release.outcome == 'failure'
         id: get_existing_release
@@ -42,7 +61,9 @@ jobs:
           script: |
             const release = await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: '${{ steps.release_info.outputs.release_tag }}' });
             core.setOutput('upload_url', release.data.upload_url);
+
       - name: 8. 上传文件到 Release
+        timeout-minutes: 60 # 1 小时
         uses: actions/upload-release-asset@v1
         env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
         with:
