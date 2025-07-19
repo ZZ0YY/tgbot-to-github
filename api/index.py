@@ -12,11 +12,15 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 YOUR_TELEGRAM_ID_STR = os.getenv('YOUR_TELEGRAM_ID')
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
+BOT_USERNAME = os.getenv('BOT_USERNAME') # 新增：获取机器人用户名
 
 DISPATCH_URL = f"https://api.github.com/repos/{GITHUB_REPO}/dispatches"
 
 @app.route('/', methods=['POST'])
 def webhook():
+    if not BOT_USERNAME:
+        return "Server config error: BOT_USERNAME is not set", 500
+        
     try:
         YOUR_TELEGRAM_ID = int(YOUR_TELEGRAM_ID_STR)
     except (ValueError, TypeError):
@@ -27,16 +31,12 @@ def webhook():
 
     message = update.get('message')
 
-    # 验证消息是否来自您的主号
     if not (message and message.get('from', {}).get('id') == YOUR_TELEGRAM_ID):
-        return "Message not from authorized user", 200
+        return "Not an authorized message", 200
 
-    # 检查消息是否包含任何可下载的媒体
-    if message.get('document') or message.get('photo') or message.get('video') or message.get('audio') or message.get('animation') or message.get('sticker'):
+    if message.get('document') or message.get('photo') or message.get('video') or message.get('audio'):
         message_id = message['message_id']
         chat_id = message['chat']['id']
-        
-        # 尝试获取文件名用于反馈，如果获取不到则使用通用名
         media = message.get('document') or message.get('video') or {}
         file_name = media.get('file_name', 'media file')
 
@@ -44,8 +44,8 @@ def webhook():
         data = {
             "event_type": "upload_file_from_user_api",
             "client_payload": {
-                "chat_id": chat_id,
                 "message_id": message_id,
+                "bot_username": BOT_USERNAME, # 关键：传递机器人用户名
             }
         }
         
