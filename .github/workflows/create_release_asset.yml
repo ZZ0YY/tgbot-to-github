@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过官方 Action 上传 Release Asset
+name: 通过官方 Action 上传 Release Asset (最终修正版)
 
 on:
   repository_dispatch:
@@ -11,7 +11,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 必须，用于创建/获取 Release
+      contents: write
 
     steps:
       - name: 1. 检出代码
@@ -38,7 +38,7 @@ jobs:
           RELEASE_TAG="daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-      - name: 5. 创建或找到 Release 并获取上传 URL
+      - name: 5. 确保 Release 存在并获取上传 URL
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -49,37 +49,38 @@ jobs:
           body: "通过机器人自动备份的文件。"
           draft: false
           prerelease: false
-        continue-on-error: true # 关键！如果已存在，则继续
+        continue-on-error: true
 
-      - name: 6. 获取已存在的 Release 的上传 URL
+      - name: 6. 获取已存在的 Release 的上传 URL (如果上一步跳过)
         if: steps.create_release.outcome == 'failure'
         id: get_existing_release
         uses: actions/github-script@v7
         with:
           script: |
-            const releases = await github.rest.repos.listReleases({
+            const release = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
-              repo: context.repo.repo
+              repo: context.repo.repo,
+              tag: '${{ steps.release_info.outputs.release_tag }}'
             });
-            const release = releases.data.find(r => r.tag_name === '${{ steps.release_info.outputs.release_tag }}');
-            if (release) {
-              core.setOutput('upload_url', release.upload_url);
-            }
+            core.setOutput('upload_url', release.data.upload_url);
         
-      # --- 核心修改：使用 GitHub 官方的上传 Action ---
-      - name: 7. 上传文件到 Release
+      # --- 全新的、至关重要的 URL 清理步骤 ---
+      - name: 7. 准备上传变量 (清理 URL)
+        id: upload_vars
+        run: |
+          RAW_UPLOAD_URL="${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}"
+          # 使用 Bash 字符串替换，移除 URL 末尾的模板部分
+          CLEAN_UPLOAD_URL=${RAW_UPLOAD_URL/\{?name,label\}/}
+          echo "upload_url=$CLEAN_UPLOAD_URL" >> $GITHUB_OUTPUT
+      # ----------------------------------------
+
+      - name: 8. 上传文件到 Release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # 根据之前步骤的结果，决定使用哪个 upload_url
-          upload_url: ${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}
-          
-          # 要上传的文件的本地路径
+          # 使用上一步清理过的 URL
+          upload_url: ${{ steps.upload_vars.outputs.upload_url }}
           asset_path: ${{ steps.download.outputs.file_path }}
-          
-          # 在 Release 中显示的文件名
           asset_name: ${{ steps.download.outputs.original_name }}
-          
-          # 内容类型，通常可以自动检测
           asset_content_type: application/octet-stream
