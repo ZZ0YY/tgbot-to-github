@@ -10,8 +10,6 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    # gh 命令需要 contents: write 来创建和上传 Release
-    # 需要 issues: write 来更新 Release body (可选，但推荐)
     permissions:
       contents: write
       issues: write
@@ -29,6 +27,9 @@ jobs:
         run: python -m pip install requests
 
       - name: 4. 从 Telegram 下载文件
+        # --- 核心修改：为步骤增加一个 ID ---
+        id: download
+        # --------------------------------
         timeout-minutes: 60
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -40,27 +41,18 @@ jobs:
         id: date
         run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
         
-      # --- 核心修改：使用 GitHub CLI (gh) ---
       - name: 6. 创建或找到 Release
         id: create_release
         env:
-          # gh 命令会自动使用这个 Token 进行认证
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
-          
-          # 尝试查看 Release 是否已存在
-          # 如果不存在，`gh release view` 会失败，这正是我们想要的
-          gh release view "$RELEASE_TAG" > /dev/null 2>&1 && IS_EXIST=true || IS_EXIST=false
-          
-          if [ "$IS_EXIST" = "true" ]; then
-            echo "Release '$RELEASE_TAG' already exists. Will upload to it."
-          else
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
             echo "Release '$RELEASE_TAG' does not exist. Creating it..."
-            # --generate-notes 会自动生成发布说明
             gh release create "$RELEASE_TAG" --title "Daily Backup - ${{ steps.date.outputs.today }}" --notes "Automated daily backup of files."
+          else
+            echo "Release '$RELEASE_TAG' already exists."
           fi
-          # 将标签名传递给下一步
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
       - name: 7. 上传文件到 Release
@@ -68,8 +60,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RELEASE_TAG="${{ steps.create_release.outputs.release_tag }}"
-          echo "Uploading all files from './downloads' to Release '$RELEASE_TAG'..."
-          
-          # gh release upload 可以接受一个目录，并自动上传其中的所有文件
-          # --clobber 参数表示如果已存在同名文件，则覆盖它
-          gh release upload "$RELEASE_TAG" ./downloads/* --clobber
+          # --- 核心修改：不再使用通配符 *，而是使用上一步输出的精确路径 ---
+          FILE_TO_UPLOAD="${{ steps.download.outputs.downloaded_file_path }}"
+          echo "Uploading '$FILE_TO_UPLOAD' to Release '$RELEASE_TAG'..."
+          gh release upload "$RELEASE_TAG" "$FILE_TO_UPLOAD" --clobber
+          # -------------------------------------------------------------

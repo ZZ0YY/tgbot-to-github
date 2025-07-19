@@ -1,4 +1,4 @@
-# /download_script.py
+# /download_script.py (Final version with output)
 
 import os
 import sys
@@ -50,7 +50,14 @@ def main():
         print(f"错误: 下载文件时失败 - {e}", file=sys.stderr)
         sys.exit(1)
 
-    print("文件下载成功。")
+    print(f"文件下载成功，保存路径: {save_path}")
+
+    # --- 核心修改：将确切的文件路径输出给后续步骤 ---
+    github_output_file = os.getenv('GITHUB_OUTPUT')
+    if github_output_file:
+        with open(github_output_file, 'a') as f:
+            print(f"downloaded_file_path={save_path}", file=f)
+    # ----------------------------------------------
 
 if __name__ == '__main__':
     main()
