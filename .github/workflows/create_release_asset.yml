@@ -1,44 +1,48 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过 cURL 和 Python 直接与 GitHub API 交互上传
+name: 通过用户 API 下载并上传大文件
 
 on:
   repository_dispatch:
-    types: [upload_file_to_release]
+    types: [upload_file_from_user_api]
   workflow_dispatch:
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Action 创建/上传 Release 所必需
 
     steps:
       - name: 1. 检出代码
         uses: actions/checkout@v4
 
-      - name: 2. 设置 Python 环境和依赖
+      - name: 2. 设置 Python 环境
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: python -m pip install requests
+      
+      - name: 3. 安装 Telethon 依赖
+        run: python -m pip install telethon
 
-      - name: 3. 从 Telegram 下载文件
+      - name: 4. 通过用户 API 下载文件
         id: download
-        timeout-minutes: 60
+        timeout-minutes: 120 # 为大文件下载预留充足时间 (2小时)
         env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          FILE_ID: ${{ github.event.client_payload.file_id }}
-          ORIGINAL_FILE_NAME_B64: ${{ github.event.client_payload.original_file_name_b64 }}
-        run: python download_script.py
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          MESSAGE_ID: ${{ github.event.client_payload.message_id }}
+        run: python -u download_script.py # -u 确保进度条实时输出
 
-      - name: 4. 准备 Release 信息
+      - name: 5. 准备 Release 信息
         id: release_info
         run: |
           RELEASE_TAG="daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-      - name: 5. 创建或找到 Release 并获取上传 URL
+      - name: 6. 确保 Release 存在并获取上传 URL
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -46,10 +50,10 @@ jobs:
         with:
           tag_name: ${{ steps.release_info.outputs.release_tag }}
           release_name: "每日备份 - ${{ steps.release_info.outputs.release_tag }}"
-          body: "通过机器人自动备份的文件。"
+          body: "通过机器人自动备份的大文件。"
         continue-on-error: true
 
-      - name: 6. 获取已存在的 Release 的上传 URL (如果上一步跳过)
+      - name: 7. 获取已存在的 Release 的上传 URL (如果上一步跳过)
         if: steps.create_release.outcome == 'failure'
         id: get_existing_release
         uses: actions/github-script@v7
@@ -62,37 +66,12 @@ jobs:
             });
             core.setOutput('upload_url', release.data.upload_url);
 
-      # --- 终极的、绝对的上传步骤 ---
-      - name: 7. 上传文件 (直接调用 API)
+      - name: 8. 上传文件到 Release (最终官方方案)
+        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # --- Part A: 准备所有变量 ---
-          RAW_UPLOAD_URL="${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}"
-          FILE_PATH="${{ steps.download.outputs.file_path }}"
-          ORIGINAL_NAME="${{ steps.download.outputs.original_name }}"
-
-          # --- Part B: 清理和编码 (最关键的一步) ---
-          # 1. 清理 URL，移除模板
-          CLEAN_UPLOAD_URL=${RAW_UPLOAD_URL/\{?name,label\}/}
-
-          # 2. 使用 Python 进行最可靠的 URL 编码
-          URL_ENCODED_NAME=$(python -c "import urllib.parse; print(urllib.parse.quote('''$ORIGINAL_NAME'''))")
-
-          # 3. 构建最终的、完整的上传 URL
-          FINAL_UPLOAD_URL="$CLEAN_UPLOAD_URL?name=$URL_ENCODED_NAME"
-
-          # --- Part C: 打印所有信息用于调试 ---
-          echo "原始文件名: $ORIGINAL_NAME"
-          echo "本地文件路径: $FILE_PATH"
-          echo "清理后的上传 URL: $CLEAN_UPLOAD_URL"
-          echo "URL 编码后的文件名: $URL_ENCODED_NAME"
-          echo "最终请求的 URL: $FINAL_UPLOAD_URL"
-
-          # --- Part D: 使用 cURL 执行上传 ---
-          curl -sS \
-            --request POST \
-            --url "$FINAL_UPLOAD_URL" \
-            --header "Authorization: token $GITHUB_TOKEN" \
-            --header "Content-Type: application/octet-stream" \
-            --data-binary "@$FILE_PATH"
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}
+          asset_path: ${{ steps.download.outputs.file_path }}
+          asset_name: ${{ steps.download.outputs.original_name }}
+          asset_content_type: application/octet-stream

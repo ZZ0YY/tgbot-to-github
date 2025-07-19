@@ -1,43 +1,92 @@
-# /download_script.py (Final version for curl)
+# /download_script.py
 
-import os, sys, base64, shutil, requests
+import os
+import sys
+import asyncio
+import time
+from telethon.sync import TelegramClient
+from telethon.sessions import StringSession
+from telethon.errors import FileReferenceExpiredError
 
-def main():
-    bot_token, file_id, b64_name = (os.getenv(k) for k in ['BOT_TOKEN', 'FILE_ID', 'ORIGINAL_FILE_NAME_B64'])
-    if not all([bot_token, file_id, b64_name]):
-        print("错误: 缺少环境变量。", file=sys.stderr); sys.exit(1)
+def progress_callback(current, total, start_time, file_name):
+    """一个用于在 Action 日志中打印下载进度的回调函数。"""
+    if total == 0: return
+    
+    elapsed_time = time.time() - start_time
+    percentage = current * 100 / total
+    speed = current / (elapsed_time + 1e-9) / (1024 * 1024)
+    
+    # 减少日志刷屏，每隔一定百分比或时间打印一次
+    if "last_print_time" not in progress_callback.__dict__:
+        progress_callback.last_print_time = 0
+    
+    if time.time() - progress_callback.last_print_time > 2 or current == total:
+        print(f"Downloading '{file_name}': {percentage:.1f}% ({current / (1024*1024):.2f}/{total / (1024*1024):.2f} MB) at {speed:.2f} MB/s")
+        progress_callback.last_print_time = time.time()
 
-    try:
-        original_name = base64.b64decode(b64_name).decode('utf-8')
-    except Exception as e:
-        print(f"错误: 解码文件名失败 - {e}", file=sys.stderr); sys.exit(1)
+async def main_async():
+    """主异步函数，负责认证、重试和下载。"""
+    api_id = os.getenv('TELEGRAM_API_ID')
+    api_hash = os.getenv('TELEGRAM_API_HASH')
+    session_string = os.getenv('TELEGRAM_SESSION_STRING')
+    chat_id_str = os.getenv('CHAT_ID')
+    message_id_str = os.getenv('MESSAGE_ID')
+
+    if not all([api_id, api_hash, session_string, chat_id_str, message_id_str]):
+        print("错误: 缺少用户 API 关键环境变量。", file=sys.stderr)
+        return 1
         
-    save_path = os.path.join("downloads", original_name)
-    os.makedirs("downloads", exist_ok=True)
-    print(f"准备下载 '{original_name}' 到 '{save_path}'...")
+    chat_id, message_id = int(chat_id_str), int(message_id_str)
 
-    try:
-        # (下载逻辑与之前版本完全相同)
-        get_file_url = f"https://api.telegram.org/bot{bot_token}/getFile"
-        response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        if not data.get('ok'): raise ValueError(f"API 错误: {data.get('description')}")
-        download_url = f"https://api.telegram.org/file/bot{bot_token}/{data['result']['file_path']}"
+    print("正在使用用户会话初始化 Telegram 客户端...")
+    
+    async with TelegramClient(StringSession(session_string), api_id, api_hash) as client:
+        print("客户端创建成功。")
+        
+        for retry in range(3):
+            try:
+                message = await client.get_messages(chat_id, ids=message_id)
 
-        with requests.get(download_url, stream=True, timeout=600) as r:
-            r.raise_for_status()
-            with open(save_path, 'wb') as f: shutil.copyfileobj(r.raw, f)
-    except Exception as e:
-        print(f"错误: 下载文件时失败 - {e}", file=sys.stderr); sys.exit(1)
+                if not (message and message.media):
+                    print("错误: 在指定消息中未找到媒体文件。", file=sys.stderr)
+                    return 1
+                
+                # 健壮的文件名提取逻辑
+                file_name = "unknown_file"
+                if hasattr(message, 'file') and hasattr(message.file, 'name'):
+                    file_name = message.file.name
+                elif hasattr(message.media, 'document') and hasattr(message.media.document, 'attributes'):
+                    for attr in message.media.document.attributes:
+                        if hasattr(attr, 'file_name'):
+                            file_name = attr.file_name
+                            break
+                
+                print(f"找到媒体文件: '{file_name}'")
+                
+                start_time = time.time()
+                downloaded_file_path = await client.download_media(
+                    message.media,
+                    file=file_name,
+                    progress_callback=lambda current, total: progress_callback(current, total, start_time, file_name)
+                )
+                
+                print(f"\n文件下载成功，本地路径: '{downloaded_file_path}'")
 
-    print(f"文件下载成功: {save_path}")
+                if output_file := os.getenv('GITHUB_OUTPUT'):
+                    with open(output_file, 'a') as f:
+                        print(f"file_path={downloaded_file_path}", file=f)
+                        print(f"original_name={file_name}", file=f)
+                return 0
 
-    # 将两个关键信息输出给后续步骤
-    if output_file := os.getenv('GITHUB_OUTPUT'):
-        with open(output_file, 'a') as f:
-            print(f"file_path={save_path}", file=f)
-            print(f"original_name={original_name}", file=f)
+            except FileReferenceExpiredError:
+                print(f"警告: 文件引用已过期，将在3秒后重试... (尝试次数 {retry + 1}/3)")
+                await asyncio.sleep(3)
+            except Exception as e:
+                print(f"错误: Telethon 操作失败 - {e}", file=sys.stderr)
+                return 1
+        
+        print("错误: 重试3次后仍然无法下载文件。", file=sys.stderr)
+        return 1
 
 if __name__ == '__main__':
-    main()
+    sys.exit(asyncio.run(main_async()))
