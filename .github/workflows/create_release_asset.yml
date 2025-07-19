@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过 Rclone 创建 Release Asset (Bash printf 版)
+name: Rclone 诊断工作流
 
 on:
   repository_dispatch:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-release:
+  diagnose-and-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -36,37 +36,45 @@ jobs:
       - name: 5. 安装 Rclone
         run: curl https://rclone.org/install.sh | sudo bash
 
-      # --- 核心修改：使用 printf 保证配置文件内容的纯净性 ---
-      - name: 6. 动态配置 Rclone (使用 printf)
+      # --- 终极诊断步骤：配置、验证、执行 ---
+      - name: 6. Rclone 诊断与执行
+        timeout-minutes: 60
         env:
           RCLONE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # --- Part A: 配置 ---
+          echo "--- 步骤 A: 创建配置文件 ---"
           CONFIG_DIR=~/.config/rclone
           CONFIG_FILE_PATH="$CONFIG_DIR/rclone.conf"
           mkdir -p "$CONFIG_DIR"
-          
-          # 使用 printf 来创建配置文件，这是最可靠的方式
-          # %s 会被后面的参数替换，\n 是换行符
           printf "[github]\ntype = github\ntoken = %s\n" "$RCLONE_GITHUB_TOKEN" > "$CONFIG_FILE_PATH"
+          echo "配置文件已创建。"
+          echo
 
-          echo "--- Rclone 配置验证 ---"
-          echo "配置文件的内容是:"
+          # --- Part B: 物理验证 ---
+          echo "--- 步骤 B: 物理文件验证 ---"
+          echo "检查文件路径和权限..."
+          ls -l "$CONFIG_FILE_PATH"
+          echo "打印文件内容..."
           cat "$CONFIG_FILE_PATH"
-          echo "Rclone 识别到的远程盘是:"
+          echo
+          
+          # --- Part C: Rclone 自我诊断 ---
+          echo "--- 步骤 C: Rclone 自我诊断 ---"
+          echo "诊断 1: Rclone 认为它的配置文件在哪里？"
+          rclone config file
+          echo
+          echo "诊断 2: Rclone 加载到的配置内容是什么 (JSON格式)？"
+          rclone config dump
+          echo
+          echo "诊断 3: Rclone 能识别出哪些配置好的远程盘？"
           rclone listremotes
-          echo "-----------------------"
+          echo "---------------------------"
+          echo
 
-      - name: 7. 获取用于 Release 的日期标签
-        id: date
-        run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-        
-      - name: 8. 同步文件到 GitHub Releases
-        timeout-minutes: 60
-        run: |
-          RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
+          # --- Part D: 执行 ---
+          echo "--- 步骤 D: 尝试执行同步 ---"
+          RELEASE_TAG="daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
           REMOTE_PATH="github:${{ github.repository }}@$RELEASE_TAG"
-          
           echo "准备将 './downloads' 目录同步到远程: ${REMOTE_PATH}"
-          
-          # 不再需要 --config 参数，因为我们已经确认了默认路径
           rclone copy ./downloads "${REMOTE_PATH}" --progress --no-traverse -vv
