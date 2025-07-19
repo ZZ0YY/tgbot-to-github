@@ -3,29 +3,37 @@
 name: 通过 Rclone 创建 Release Asset
 
 on:
+  # 当接收到来自机器人的 repository_dispatch 事件时触发
   repository_dispatch:
     types: [upload_file_to_release]
+  
+  # 允许在 GitHub Actions 页面手动触发，方便调试
   workflow_dispatch:
 
 jobs:
   build-and-release:
+    # 使用最新的 Ubuntu 虚拟机环境
     runs-on: ubuntu-latest
+
+    # 赋予工作流向仓库写入（创建 Release）的权限
     permissions:
       contents: write
 
     steps:
-      - name: 检出代码
+      - name: 1. 检出代码
+        # 将仓库代码下载到虚拟机中，以便运行我们的脚本
         uses: actions/checkout@v4
 
-      - name: 设置 Python 环境
+      - name: 2. 设置 Python 环境
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: 安装 Python 依赖
+      - name: 3. 安装 Python 依赖
         run: python -m pip install requests
 
-      - name: 从 Telegram 下载文件
+      - name: 4. 从 Telegram 下载文件
+        # 为可能的大文件下载设置较长的超时时间
         timeout-minutes: 60
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -33,40 +41,43 @@ jobs:
           ORIGINAL_FILE_NAME_B64: ${{ github.event.client_payload.original_file_name_b64 }}
         run: python download_script.py
 
-      - name: 安装 Rclone
+      - name: 5. 安装 Rclone
+        # 使用官方推荐的安装脚本
         run: curl https://rclone.org/install.sh | sudo bash
 
-      # --- 核心修改：手动创建 Rclone 配置文件 ---
-      - name: 配置 Rclone
+      - name: 6. 动态配置 Rclone
+        # 在非交互式环境中，通过脚本生成配置文件是最可靠的方式
         env:
-          # 将 Token 作为环境变量传入，以避免在脚本中暴露
           RCLONE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 创建 Rclone 的配置目录
+          # 确保 Rclone 配置目录存在
           mkdir -p ~/.config/rclone
           
-          # 使用 echo 和重定向操作，将配置内容写入 rclone.conf 文件
-          # [github] 是远程盘的名称，必须与 rclone copy 命令中的一致
+          # 将配置写入 rclone.conf
+          # [github] 是我们定义的远程存储的名称
           echo "[github]
           type = github
           token = ${RCLONE_GITHUB_TOKEN}" > ~/.config/rclone/rclone.conf
           
-          echo "Rclone configuration generated successfully."
-          # 验证配置是否成功
-          rclone config list
-      # -------------------------------------------
+          echo "--- Rclone 配置验证 ---"
+          # 使用 'rclone listremotes' 命令验证配置是否被正确加载
+          rclone listremotes
+          echo "-----------------------"
 
-      - name: 获取当前日期 (上海时区)
+      - name: 7. 获取用于 Release 的日期标签
         id: date
+        # 设置时区为上海，确保日期与我们所在地区一致
         run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      - name: 同步文件到 GitHub Releases
+      - name: 8. 同步文件到 GitHub Releases
+        # 为可能的大文件上传设置较长的超时时间
         timeout-minutes: 60
         run: |
+          # 定义 Release 的标签和 Rclone 的远程路径
           RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
-          # 这里我们使用之前在配置文件中定义的远程盘名称 "github"
           REMOTE_PATH="github:${{ github.repository }}@$RELEASE_TAG"
           
-          echo "准备将 './downloads' 目录同步到远程 '$REMOTE_PATH'"
+          echo "准备将 './downloads' 目录同步到远程: ${REMOTE_PATH}"
           
-          rclone copy ./downloads "$REMOTE_PATH" --progress --no-traverse
+          # 执行复制命令，并显示进度条
+          rclone copy ./downloads "${REMOTE_PATH}" --progress --no-traverse
