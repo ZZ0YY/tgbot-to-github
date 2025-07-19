@@ -1,0 +1,95 @@
+# /.github/workflows/processor.yml
+
+name: 按顺序处理 Telegram 下载任务
+
+# --- 核心修改：触发器 ---
+on:
+  workflow_run:
+    # 只在名为“接收 Telegram 任务”的工作流成功完成后触发
+    workflows: ["接收 Telegram 任务"]
+    types:
+      - completed
+# -------------------------
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    # 只有当上游工作流是成功完成时才运行
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: write
+      # 需要 actions: read 权限来下载产物
+      actions: read 
+
+    timeout-minutes: 350
+
+    steps:
+      - name: 1. 检出代码
+        uses: actions/checkout@v4
+
+      # --- 核心修改：下载任务产物 ---
+      - name: 2. 下载任务信息
+        uses: actions/download-artifact@v4
+        with:
+          name: task-for-run-${{ github.event.workflow_run.id }}
+      # ---------------------------------
+
+      - name: 3. 解析任务信息并设置环境变量
+        id: task_payload
+        run: |
+          # 使用 jq 工具从 json 文件中读取值，并设置为环境变量
+          echo "CHAT_ID=$(jq -r .chat_id task_payload.json)" >> $GITHUB_ENV
+          echo "MESSAGE_ID=$(jq -r .message_id task_payload.json)" >> $GITHUB_ENV
+
+      - name: 4. 设置 Python 环境
+        uses: actions/setup-python@v4
+        with: { python-version: '3.11' }
+      
+      - name: 5. 安装 Telethon 依赖
+        run: python -m pip install telethon
+
+      - name: 6. 通过用户 API 下载文件
+        id: download
+        timeout-minutes: 300
+        env:
+          # 从上一步设置的环境变量中读取
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          CHAT_ID: ${{ env.CHAT_ID }}
+          MESSAGE_ID: ${{ env.MESSAGE_ID }}
+        run: python -u download_script.py
+
+      # --- 后续所有上传步骤 (7, 8, 9) 与之前完全相同 ---
+      - name: 7. 准备 Release 信息
+        id: release_info
+        run: echo "release_tag=daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: 8. 确保 Release 存在
+        id: create_release
+        uses: actions/create-release@v1
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        with:
+          tag_name: ${{ steps.release_info.outputs.release_tag }}
+          release_name: "每日备份 - ${{ steps.release_info.outputs.release_tag }}"
+          body: "通过机器人自动备份的大文件。"
+        continue-on-error: true
+
+      - name: 9. 获取已存在的 Release 的上传 URL
+        if: steps.create_release.outcome == 'failure'
+        id: get_existing_release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const release = await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: '${{ steps.release_info.outputs.release_tag }}' });
+            core.setOutput('upload_url', release.data.upload_url);
+
+      - name: 10. 上传文件到 Release
+        timeout-minutes: 60
+        uses: actions/upload-release-asset@v1
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}
+          asset_path: ${{ steps.download.outputs.file_path }}
+          asset_name: ${{ steps.download.outputs.original_name }}
+          asset_content_type: application/octet-stream

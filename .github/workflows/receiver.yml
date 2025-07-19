@@ -1,0 +1,24 @@
+# /.github/workflows/receiver.yml
+
+name: 接收 Telegram 任务
+
+on:
+  repository_dispatch:
+    types: [upload_file_from_user_api]
+
+jobs:
+  receive-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 保存任务信息为产物
+        run: |
+          # 将从机器人后端接收到的 client_payload (JSON 格式) 写入一个文件
+          echo '${{ toJSON(github.event.client_payload) }}' > task_payload.json
+
+      - name: 2. 上传任务产物
+        # 使用官方 action 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          # 产物的名字是唯一的，确保不会冲突
+          name: task-for-run-${{ github.run_id }}
+          path: task_payload.json
