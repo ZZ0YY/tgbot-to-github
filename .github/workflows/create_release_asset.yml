@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过 Rclone 创建 Release Asset
+name: 通过 Rclone 创建 Release Asset (带验证)
 
 on:
   repository_dispatch:
@@ -36,18 +36,32 @@ jobs:
       - name: 5. 安装 Rclone
         run: curl https://rclone.org/install.sh | sudo bash
 
-      # --- 核心修改：使用 Python 脚本来创建 Rclone 配置文件 ---
-      - name: 6. 动态配置 Rclone
+      - name: 6. 使用 Python 脚本生成 Rclone 配置文件
         env:
           RCLONE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python create_rclone_config.py
-      # ----------------------------------------------------
+      
+      # --- 全新的、至关重要的验证步骤 ---
+      - name: 7. 验证 Rclone 配置文件内容
+        run: |
+          echo "--- 开始验证配置文件 ---"
+          CONFIG_FILE_PATH=~/.config/rclone/rclone.conf
+          if [ -f "$CONFIG_FILE_PATH" ]; then
+            echo "文件存在于: $CONFIG_FILE_PATH"
+            echo "文件的确切内容是:"
+            cat "$CONFIG_FILE_PATH"
+          else
+            echo "::error::错误：配置文件不存在于预期路径！"
+            exit 1
+          fi
+          echo "--- 验证结束 ---"
+      # ---------------------------------
 
-      - name: 7. 获取用于 Release 的日期标签
+      - name: 8. 获取用于 Release 的日期标签
         id: date
         run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
         
-      - name: 8. 同步文件到 GitHub Releases
+      - name: 9. 同步文件到 GitHub Releases
         timeout-minutes: 60
         run: |
           RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
@@ -55,5 +69,5 @@ jobs:
           
           echo "准备将 './downloads' 目录同步到远程: ${REMOTE_PATH}"
           
-          # 增加 --config 参数明确指定配置文件路径，并增加 -v 参数打印详细日志
-          rclone copy ./downloads "${REMOTE_PATH}" --config ~/.config/rclone/rclone.conf --progress --no-traverse -v
+          # 增加 -vv 参数打印最详细的调试日志，并强制指定配置文件路径
+          rclone copy ./downloads "${REMOTE_PATH}" --config ~/.config/rclone/rclone.conf --progress --no-traverse -vv
