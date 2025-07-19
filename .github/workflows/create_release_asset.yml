@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: Rclone 诊断工作流
+name: 通过 Rclone 创建 Release Asset (Docker 版)
 
 on:
   repository_dispatch:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  diagnose-and-release:
+  build-and-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,48 +33,27 @@ jobs:
           ORIGINAL_FILE_NAME_B64: ${{ github.event.client_payload.original_file_name_b64 }}
         run: python download_script.py
 
-      - name: 5. 安装 Rclone
-        run: curl https://rclone.org/install.sh | sudo bash
+      - name: 5. 获取用于 Release 的日期标签
+        id: date
+        run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-      # --- 终极诊断步骤：配置、验证、执行 ---
-      - name: 6. Rclone 诊断与执行
+      # --- 核心修改：使用 Rclone 官方 Docker 镜像执行同步 ---
+      - name: 6. 同步文件到 GitHub Releases (via Rclone Docker)
         timeout-minutes: 60
         env:
+          # 将 Token 作为环境变量传递给 Docker 容器
           RCLONE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # --- Part A: 配置 ---
-          echo "--- 步骤 A: 创建配置文件 ---"
-          CONFIG_DIR=~/.config/rclone
-          CONFIG_FILE_PATH="$CONFIG_DIR/rclone.conf"
-          mkdir -p "$CONFIG_DIR"
-          printf "[github]\ntype = github\ntoken = %s\n" "$RCLONE_GITHUB_TOKEN" > "$CONFIG_FILE_PATH"
-          echo "配置文件已创建。"
-          echo
-
-          # --- Part B: 物理验证 ---
-          echo "--- 步骤 B: 物理文件验证 ---"
-          echo "检查文件路径和权限..."
-          ls -l "$CONFIG_FILE_PATH"
-          echo "打印文件内容..."
-          cat "$CONFIG_FILE_PATH"
-          echo
-          
-          # --- Part C: Rclone 自我诊断 ---
-          echo "--- 步骤 C: Rclone 自我诊断 ---"
-          echo "诊断 1: Rclone 认为它的配置文件在哪里？"
-          rclone config file
-          echo
-          echo "诊断 2: Rclone 加载到的配置内容是什么 (JSON格式)？"
-          rclone config dump
-          echo
-          echo "诊断 3: Rclone 能识别出哪些配置好的远程盘？"
-          rclone listremotes
-          echo "---------------------------"
-          echo
-
-          # --- Part D: 执行 ---
-          echo "--- 步骤 D: 尝试执行同步 ---"
-          RELEASE_TAG="daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
+          # 定义 shell 变量，方便阅读
+          RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
           REMOTE_PATH="github:${{ github.repository }}@$RELEASE_TAG"
-          echo "准备将 './downloads' 目录同步到远程: ${REMOTE_PATH}"
-          rclone copy ./downloads "${REMOTE_PATH}" --progress --no-traverse -vv
+
+          # 运行 Rclone 官方 Docker 镜像
+          # docker run [options] <image> [command]
+          docker run --rm \
+            -v ./downloads:/data/downloads \
+            -v /tmp/rclone_config:/config/rclone \
+            -e RCLONE_CONFIG_GITHUB_TYPE=github \
+            -e RCLONE_CONFIG_GITHUB_TOKEN \
+            rclone/rclone:latest \
+            copy /data/downloads "$REMOTE_PATH" --progress --no-traverse -vv
