@@ -1,6 +1,6 @@
 # /.github/workflows/create_release_asset.yml
 
-name: 通过 GitHub CLI (gh) 创建 Release Asset
+name: 通过 cURL 和 GitHub API 直接上传 Release Asset
 
 on:
   repository_dispatch:
@@ -12,24 +12,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      issues: write
 
     steps:
       - name: 1. 检出代码
         uses: actions/checkout@v4
 
-      - name: 2. 设置 Python 环境
+      - name: 2. 设置 Python 环境和依赖
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      
-      - name: 3. 安装 Python 依赖
-        run: python -m pip install requests
+      - run: python -m pip install requests
 
-      - name: 4. 从 Telegram 下载文件
-        # --- 核心修改：为步骤增加一个 ID ---
+      - name: 3. 从 Telegram 下载文件
         id: download
-        # --------------------------------
         timeout-minutes: 60
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -37,31 +32,44 @@ jobs:
           ORIGINAL_FILE_NAME_B64: ${{ github.event.client_payload.original_file_name_b64 }}
         run: python download_script.py
 
-      - name: 5. 获取用于 Release 的日期标签
-        id: date
-        run: echo "today=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-        
-      - name: 6. 创建或找到 Release
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 4. 准备 Release 信息
+        id: release_info
         run: |
-          RELEASE_TAG="daily-backup-${{ steps.date.outputs.today }}"
-          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            echo "Release '$RELEASE_TAG' does not exist. Creating it..."
-            gh release create "$RELEASE_TAG" --title "Daily Backup - ${{ steps.date.outputs.today }}" --notes "Automated daily backup of files."
-          else
-            echo "Release '$RELEASE_TAG' already exists."
-          fi
+          RELEASE_TAG="daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
-      - name: 7. 上传文件到 Release
+      - name: 5. 创建 Release 并获取上传 URL
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.release_info.outputs.release_tag }}
+          release_name: "每日备份 - ${{ steps.release_info.outputs.release_tag }}"
+          body: "通过机器人自动备份的文件。"
+          draft: false
+          prerelease: false
+
+      - name: 6. 使用 cURL 上传文件 (最终方案)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE_TAG="${{ steps.create_release.outputs.release_tag }}"
-          # --- 核心修改：不再使用通配符 *，而是使用上一步输出的精确路径 ---
-          FILE_TO_UPLOAD="${{ steps.download.outputs.downloaded_file_path }}"
-          echo "Uploading '$FILE_TO_UPLOAD' to Release '$RELEASE_TAG'..."
-          gh release upload "$RELEASE_TAG" "$FILE_TO_UPLOAD" --clobber
-          # -------------------------------------------------------------
+          # 从上一步获取关键信息
+          UPLOAD_URL="${{ steps.create_release.outputs.upload_url }}"
+          FILE_PATH="${{ steps.download.outputs.file_path }}"
+          ORIGINAL_NAME="${{ steps.download.outputs.original_name }}"
+          
+          # 对原始文件名进行 URL 编码，这是 API 的要求
+          URL_ENCODED_NAME=$(jq -sRr @uri <<< "$ORIGINAL_NAME")
+          
+          echo "准备上传文件: $FILE_PATH"
+          echo "在 Release 中将显示为: $ORIGINAL_NAME"
+          echo "最终上传 URL: $UPLOAD_URL?name=$URL_ENCODED_NAME"
+          
+          # 直接调用 cURL 与 GitHub API 对话
+          curl \
+            --request POST \
+            --url "$UPLOAD_URL?name=$URL_ENCODED_NAME" \
+            --header "Authorization: token $GITHUB_TOKEN" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary "@$FILE_PATH"
