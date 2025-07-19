@@ -1,42 +1,45 @@
-# Telegram 大文件转存至 GitHub Releases (用户 API 最终版)
+# Telegram 全自动大文件备份工具 (最终版)
 
-本项目提供一个高度自动化、健壮可靠的解决方案，能够将您发送到 Telegram Bot 的大文件（最大 2GB/4GB），稳定地转存到本 GitHub 仓库的 Releases 页面。
+本工具提供一个“一劳永逸”的解决方案，能够将您在指定的 Telegram 私有群组中发送的任何大文件（最大 2GB/4GB），**全自动地**、**无需任何命令地**，备份到本 GitHub 仓库的 Releases 页面。
 
-本项目采用 **Telegram 用户 API (通过 Telethon 库)** 进行文件下载，从而完美绕过了 Bot API 的 20MB 文件大小限制。后端触发器采用无服务器架构 (Serverless)，实现了低成本、免维护的 7x24 小时运行。
+## 核心特性
+
+- **完全自动**: 您只需将文件发到群组，后续所有流程自动完成。
+- **支持大文件**: 轻松处理最大 2GB/4GB 的文件。
+- **通用媒体捕获**: 支持文件、照片、视频、相册等多种媒体类型。
+- **清晰的状态反馈**: 机器人会在群组中实时回复任务接收状态，让您对流程了如指掌。
+- **健壮可靠**: 下载脚本集成了重试机制，上传流程使用官方 GitHub Actions，确保了端到端的可靠性。
+- **每日自动归档**: 所有文件会自动归类到以当天日期命名的 Release 中。
+- **安全**: 您的个人账户凭证（会话字符串）仅存储在 GitHub Secrets 中，与后端服务完全隔离。
 
 ## 工作流程
 
-1.  **触发**: 您（使用主号）将任何含有媒体的消息发送或转发给您的私人 Telegram 机器人。
-2.  **Webhook (云平台)**: 部署在 Vercel 或 Zeabur 上的轻量级 Python 后端，通过 Webhook 即时接收到消息，并验证消息来源。
-3.  **调度 (Dispatch)**: 后端提取**消息 ID** 和**机器人自身的用户名**，然后安全地触发 GitHub Action 工作流。
-4.  **下载 (GitHub Action)**:
-    - Action 启动一个虚拟机，并安装 `Telethon` 库。
-    - 一个 Python 脚本 (`download_script.py`) 读取您存储在 GitHub Secrets 中的**主号** API 凭证。
-    - 脚本以您的名义登录 Telegram，并在**与指定机器人的对话**中找到该消息，然后以高速下载大文件，并提供实时进度。
-5.  **上传 (GitHub Action)**:
-    - Action 使用官方的 `actions/create-release` 和 `actions/upload-release-asset` 工具。
-    - 它会创建或更新一个以当天日期命名的 Release，并将下载好的文件作为 Asset 上传。
+1.  **建立工作空间**: 您需要创建一个私有群组，并将您的主号和机器人加入，同时将机器人设为管理员。
+2.  **触发**: 您将任何媒体文件或相册发送/转发到此私有群组。
+3.  **Webhook (机器人)**: 作为群管理员，机器人立即检测到新消息并通过 Webhook 通知后端服务。
+4.  **调度 (后端)**: 后端验证消息来自授权的群组，然后为每个媒体文件触发一次 GitHub Action，并**在群组中回复状态消息**。
+5.  **下载 (用户 API)**: Action 使用您的主号 API 凭证登录，进入该群组，找到指定的消息并高速下载文件。
+6.  **上传 (官方 Action)**: Action 使用官方工具创建或更新当天的 Release，并将下载好的文件作为 Asset 上传。
 
 ## 部署与配置指南
 
-### 第 1 步：准备所有凭证
-- **主号凭证**: `API ID`, `API Hash` (来自 `my.telegram.org`), `Session String` (通过 `generate_session.py` 生成)。
-- **机器人凭证**: `Bot Token` (来自 `@BotFather`), `机器人用户名` (例如 `@your_bot_name`)。
-- **GitHub 凭证**: 拥有 `repo` 权限的 `Personal Access Token (PAT)`。
-- **您的 Telegram ID**: `个人数字ID` (来自 `@userinfobot`)。
+### 第 1 步：准备凭证
+- **主号凭证**: `API ID`, `API Hash`, `Session String`。
+- **机器人凭证**: `Bot Token`。
+- **GitHub 凭证**: `Personal Access Token (PAT)` (需 `repo` 权限)。
+- **群组 ID**: 一个以 `-` 开头的负数，通过将群内消息转发给 `@userinfobot` 获取。
 
 ### 第 2 步：部署后端服务 (Vercel/Zeabur)
-1.  选择一个云平台并关联此 GitHub 仓库。
-2.  在项目的**环境变量**设置中，添加以下 **5 个**变量：
+1.  关联此 GitHub 仓库到您的云平台。
+2.  在项目的**环境变量**中，添加 4 个变量：
     - `TELEGRAM_BOT_TOKEN`
-    - `YOUR_TELEGRAM_ID`
+    - `AUTHORIZED_CHAT_ID` (您的私有群组 ID)
     - `GITHUB_REPO` (本仓库路径, `用户名/仓库名`)
     - `GITHUB_TOKEN` (您的 PAT)
-    - `BOT_USERNAME` (您的机器人用户名, 如 `@my_bot`)
 3.  部署服务并获取其**公开 URL**。
 
 ### 第 3 步：配置 GitHub Secrets
-在您的 GitHub 仓库 `Settings` -> `Secrets and variables` -> `Actions` 中，添加 **5 个** Secrets：
+在您的 GitHub 仓库 `Settings` -> `Secrets and variables` -> `Actions` 中，添加 5 个 Secrets：
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
 - `TELEGRAM_SESSION_STRING`
@@ -44,8 +47,8 @@
 - `TELEGRAM_BOT_TOKEN`
 
 ### 第 4 步：设置 Telegram Webhook
-在浏览器中访问以下 URL，将 `<...>` 部分替换为您的真实信息：
+在浏览器中访问以下 URL (替换 `<...>` 部分)：
 `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_DEPLOYED_URL>`
 
 ### 第 5 步：开始使用
-一切就绪！现在，您可以向您的机器人发送任何大文件，稍等片刻，即可在本仓库的 **Releases** 页面看到它们被成功归档。
+现在，只需将任何文件或相册发送到您的私有群组，即可享受全自动的备份体验！

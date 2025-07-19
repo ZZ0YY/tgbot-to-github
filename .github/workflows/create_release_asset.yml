@@ -1,18 +1,13 @@
 # /.github/workflows/create_release_asset.yml
 
 name: 通过用户 API 下载并上传大文件
-
 on:
-  repository_dispatch:
-    types: [upload_file_from_user_api]
+  repository_dispatch: { types: [upload_file_from_user_api] }
   workflow_dispatch:
-
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    permissions: { contents: write }
     steps:
       - { name: 1. 检出代码, uses: actions/checkout@v4 }
       - { name: 2. 设置 Python 环境, uses: actions/setup-python@v4, with: { python-version: '3.11' } }
@@ -24,8 +19,8 @@ jobs:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
           MESSAGE_ID: ${{ github.event.client_payload.message_id }}
-          BOT_USERNAME: ${{ github.event.client_payload.bot_username }} # 新增
         run: python -u download_script.py
       - name: 5. 准备 Release 信息
         id: release_info
