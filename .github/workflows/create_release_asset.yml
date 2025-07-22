@@ -7,11 +7,16 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    permissions: { contents: write }
+    permissions:
+      contents: write # 允许创建/更新 release
     steps:
-      - { name: 1. 检出代码, uses: actions/checkout@v4 }
-      - { name: 2. 设置 Python 环境, uses: actions/setup-python@v4, with: { python-version: '3.11' } }
-      - { name: 3. 安装 Telethon 依赖, run: python -m pip install telethon }
+      - name: 1. 检出代码
+        uses: actions/checkout@v4
+      - name: 2. 设置 Python 环境
+        uses: actions/setup-python@v4
+        with: { python-version: '3.11' }
+      - name: 3. 安装 Telethon 依赖
+        run: python -m pip install telethon
       - name: 4. 通过用户 API 下载文件
         id: download
         timeout-minutes: 120
@@ -20,33 +25,47 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
           CHAT_ID: ${{ github.event.client_payload.chat_id }}
-          MESSAGE_ID: ${{ github.event.client_payload.message_id }}
+          # --- 修改: 变量名从 MESSAGE_ID 改为 MESSAGE_IDS ---
+          MESSAGE_IDS: ${{ github.event.client_payload.message_ids }}
         run: python -u download_script.py
       - name: 5. 准备 Release 信息
         id: release_info
         run: echo "release_tag=daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-      - name: 6. 确保 Release 存在并获取上传 URL
-        id: create_release
-        uses: actions/create-release@v1
-        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
-        with:
-          tag_name: ${{ steps.release_info.outputs.release_tag }}
-          release_name: "每日备份 - ${{ steps.release_info.outputs.release_tag }}"
-          body: "通过机器人自动备份的大文件。"
-        continue-on-error: true
-      - name: 7. 获取已存在的 Release 的上传 URL
-        if: steps.create_release.outcome == 'failure'
-        id: get_existing_release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const release = await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: '${{ steps.release_info.outputs.release_tag }}' });
-            core.setOutput('upload_url', release.data.upload_url);
-      - name: 8. 上传文件到 Release
-        uses: actions/upload-release-asset@v1
-        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url || steps.get_existing_release.outputs.upload_url }}
-          asset_path: ${{ steps.download.outputs.file_path }}
-          asset_name: ${{ steps.download.outputs.original_name }}
-          asset_content_type: application/octet-stream
+      
+      # --- 修改: 步骤 6, 7, 8 合并并简化为一个使用 gh CLI 的步骤 ---
+      - name: 6. 创建或获取 Release 并上传所有资产
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 从上一步获取下载好的文件路径和原始文件名
+          ASSET_PATHS: ${{ steps.download.outputs.file_paths }}
+          ASSET_NAMES: ${{ steps.download.outputs.original_names }}
+          RELEASE_TAG: ${{ steps.release_info.outputs.release_tag }}
+        run: |
+          # 确保 release 存在，如果不存在则创建它。`--generate-notes` 可以自动生成一些发布说明。
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "每日备份 - $RELEASE_TAG" \
+            --notes "通过机器人自动备份的大文件。" \
+            --prerelease=false \
+            --draft=false || echo "Release $RELEASE_TAG 已存在，将直接上传文件。"
+          
+          echo "准备上传资产..."
+          
+          # 将多行字符串转换为 bash 数组
+          mapfile -t paths < <(echo "$ASSET_PATHS")
+          mapfile -t names < <(echo "$ASSET_NAMES")
+          
+          # 循环上传每一个文件
+          for i in "${!paths[@]}"; do
+            path="${paths[$i]}"
+            name="${names[$i]}"
+            if [[ -f "$path" ]]; then
+              echo "正在上传: '$name' (来自路径: '$path') 到 Release '$RELEASE_TAG'..."
+              gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber
+              echo "上传 '$name' 成功。"
+            else
+              echo "警告: 文件 '$path' 不存在，跳过上传。"
+            fi
+          done
+
+          echo "所有文件上传完毕。"

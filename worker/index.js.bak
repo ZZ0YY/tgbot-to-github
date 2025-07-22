@@ -1,0 +1,94 @@
+// /worker/index.js (Final Forensic Version)
+
+// 这是一个新的辅助函数，用于发送调试信息
+async function sendDebugMessage(env, text) {
+  const botToken = env.TELEGRAM_BOT_TOKEN;
+  const adminId = env.ADMIN_USER_ID;
+  if (!botToken || !adminId) return;
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  // 将长消息分段发送，以防超出 Telegram 消息长度限制
+  const MAX_LENGTH = 4096;
+  const chunks = [];
+  for (let i = 0; i < text.length; i += MAX_LENGTH) {
+    chunks.push(text.substring(i, i + MAX_LENGTH));
+  }
+
+  for (const chunk of chunks) {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: adminId, text: chunk })
+    });
+  }
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405 });
+    }
+
+    try {
+      const update = await request.json();
+      const message = update.message || update.channel_post;
+
+      if (message && message.chat) {
+        // --- 核心的、法证级的诊断逻辑 ---
+        const receivedChatId = message.chat.id;
+        const envChatId = env.AUTHORIZED_CHAT_ID;
+        const parsedChatId = parseInt(env.AUTHORIZED_CHAT_ID, 10);
+        const comparisonResult = receivedChatId === parsedChatId;
+
+        // 构建一份详细的诊断报告
+        const report = `
+🐞 **法证诊断报告** 🐞
+
+--- 接收到的数据 ---
+Chat ID (值): \`${receivedChatId}\`
+Chat ID (类型): \`${typeof receivedChatId}\`
+
+--- 从环境变量读取的数据 ---
+env.AUTHORIZED_CHAT_ID (值): \`"${envChatId}"\`
+env.AUTHORIZED_CHAT_ID (类型): \`${typeof envChatId}\`
+
+--- 解析后的数据 ---
+Parsed Chat ID (值): \`${parsedChatId}\`
+Parsed Chat ID (类型): \`${typeof parsedChatId}\`
+
+--- 最终比较 ---
+比较: \`${receivedChatId} === ${parsedChatId}\`
+结果: **${comparisonResult.toString().toUpperCase()}**
+
+--- 原始消息 (部分) ---
+\`\`\`json
+${JSON.stringify(message, null, 2).substring(0, 1000)}
+\`\`\`
+        `;
+        
+        // 将这份完整的报告发送给您
+        await sendDebugMessage(env, report);
+        // ------------------------------------
+
+        // 执行原始的判断逻辑
+        if (comparisonResult && (message.document || message.photo || message.video || message.audio)) {
+          
+          const message_id = message.message_id;
+          const dispatchUrl = `https://api.github.com/repos/${env.GH_REPO}/dispatches`;
+          
+          await fetch(dispatchUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `token ${env.GH_PAT}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-Pinger' },
+            body: JSON.stringify({ event_type: 'new_file_ping', client_payload: { chat_id: receivedChatId, message_id } })
+          });
+          
+          return new Response('Ping sent', { status: 200 });
+        }
+      }
+      return new Response('Message not applicable', { status: 200 });
+    } catch (error) {
+      await sendDebugMessage(env, `Worker 执行时发生严重错误:\n\`\`\`\n${error.stack}\n\`\`\``);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+  }
+};

@@ -1,0 +1,5 @@
+# /worker/wrangler.toml
+
+name = "tgbot-to-github-worker"
+main = "index.js"
+compatibility_date = "2025-07-20"

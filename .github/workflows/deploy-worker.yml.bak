@@ -1,0 +1,37 @@
+# /.github/workflows/deploy-worker.yml
+
+name: 部署 Cloudflare Worker
+
+on:
+  # --- 核心修正：移除所有不必要的路径限制 ---
+  # 只要 main 分支有任何代码被推送，就自动触发
+  push:
+    branches: [main]
+  # ------------------------------------
+  
+  # 允许在 GitHub Actions 页面手动触发
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 1. 检出代码
+        uses: actions/checkout@v4
+
+      - name: 2. 部署到 Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: 'worker'
+          
+          # 声明需要上传的 Secrets 的名称列表
+          secrets: [ "TELEGRAM_BOT_TOKEN", "AUTHORIZED_CHAT_ID", "GH_REPO", "GH_PAT" ]
+        env:
+          # 为上面列表中的每一项，都从 GitHub Secrets 提供一个确切的值
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          AUTHORIZED_CHAT_ID: ${{ secrets.AUTHORIZED_CHAT_ID }}
+          GH_REPO: ${{ secrets.GH_REPO }}
+          GH_PAT: ${{ secrets.GH_PAT }}

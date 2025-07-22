@@ -1,0 +1,79 @@
+# /.github/workflows/workflow.yml
+
+name: 批处理文件备份任务
+
+on:
+  repository_dispatch:
+    types: [new_file_ping]
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-batch-processor
+  cancel-in-progress: false
+
+jobs:
+  process-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 1. 检出代码 (包含状态文件)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} # 使用 PAT 检出，以便后续能推送
+
+      - name: 2. 读取上次处理的消息 ID
+        id: read_state
+        run: echo "last_id=$(cat last_message_id.txt)" >> $GITHUB_OUTPUT
+
+      - name: 3. 设置 Python 环境和依赖
+        uses: actions/setup-python@v4
+        with: { python-version: '3.11' }
+      - run: python -m pip install telethon
+
+      - name: 4. 批量下载新文件
+        id: download
+        timeout-minutes: 120
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          CHAT_ID: ${{ secrets.AUTHORIZED_CHAT_ID }} # 从 Secret 读取群组ID
+        run: python -u download_script.py
+
+      - name: 5. 准备 Release 信息
+        id: release_info
+        run: echo "release_tag=daily-backup-$(TZ='Asia/Shanghai' date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: 6. 上传文件到 Release
+        # 只有当下载了新文件时才执行
+        if: steps.download.outputs.download_count > 0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="${{ steps.release_info.outputs.release_tag }}"
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --title "每日备份 - $RELEASE_TAG" --notes "自动备份的文件。"
+          fi
+          gh release upload "$RELEASE_TAG" ./downloads/* --clobber
+
+      - name: 7. 更新并提交状态文件
+        if: steps.download.outputs.download_count > 0
+        run: |
+          echo "${{ steps.download.outputs.new_last_message_id }}" > last_message_id.txt
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_message_id.txt
+          git commit -m "状态更新：处理到消息 ID ${{ steps.download.outputs.new_last_message_id }}"
+          git push
+
+      - name: 8. 发送完成通知到 Telegram
+        if: steps.download.outputs.download_count > 0
+        run: |
+          COUNT=${{ steps.download.outputs.download_count }}
+          MESSAGE="✅ **备份完成** %0A%0A本次批处理共成功备份了 ${COUNT} 个新文件。"
+          # 使用 curl 调用 API，%0A 是换行符
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.AUTHORIZED_CHAT_ID }}" \
+            -d text="$MESSAGE" -d parse_mode="Markdown"
